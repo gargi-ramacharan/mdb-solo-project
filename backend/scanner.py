@@ -1,0 +1,249 @@
+"""PDF hidden-text detection using PyMuPDF."""
+import uuid
+
+import pymupdf
+
+from classifier import SEVERITY, classify
+
+TINY_FONT_PT = 4.0
+WHITE_THRESHOLD = 240
+LOW_CONTRAST_RATIO = 1.5  # WCAG contrast ratio; 1.0 = identical colors, 21 = black on white
+
+INVISIBLE_CHARS = {
+    "​": "ZERO WIDTH SPACE",
+    "‌": "ZERO WIDTH NON-JOINER",
+    "‍": "ZERO WIDTH JOINER",
+    "⁠": "WORD JOINER",
+    "﻿": "ZERO WIDTH NO-BREAK SPACE",
+    "­": "SOFT HYPHEN",
+}
+
+# Priority when a span triggers several techniques at once.
+PRIORITY = ["invisible_render", "off_page", "white_text", "tiny_font"]
+
+TECHNIQUE_REASONS = {
+    "invisible_render": "Text is drawn with an invisible render mode or zero opacity, so it never appears on screen but is still extractable.",
+    "off_page": "Text is positioned outside the visible page area, so a human never sees it but text extraction still picks it up.",
+    "white_text": "Text color is (nearly) the same as the background behind it, making it invisible to a human reader.",
+    "tiny_font": "Font size is below {pt}pt, too small for a human to read.",
+    "invisible_unicode": "Text contains zero-width / invisible Unicode characters that humans can't see but AI models read.",
+    "metadata": "Document metadata contains text a reader never sees on the page but that AI tools may ingest.",
+}
+
+
+def _rgb(color_int: int) -> tuple[int, int, int]:
+    return (color_int >> 16) & 255, (color_int >> 8) & 255, color_int & 255
+
+
+def _luminance(rgb) -> float:
+    def ch(c):
+        c = c / 255
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = rgb
+    return 0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b)
+
+
+def _contrast(a, b) -> float:
+    la, lb = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def _background_color(pix: pymupdf.Pixmap, bbox: pymupdf.Rect, scale: float):
+    """Median color of the rendered pixels inside the span's bbox (glyphs are thin, so this is ~background)."""
+    x0, y0 = max(int(bbox.x0 * scale), 0), max(int(bbox.y0 * scale), 0)
+    x1, y1 = min(int(bbox.x1 * scale) + 1, pix.width), min(int(bbox.y1 * scale) + 1, pix.height)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    samples = []
+    step = max(1, (x1 - x0) // 20)
+    for y in range(y0, y1, max(1, (y1 - y0) // 5)):
+        for x in range(x0, x1, step):
+            samples.append(pix.pixel(x, y)[:3])
+    if not samples:
+        return None
+    samples.sort(key=sum)
+    return samples[len(samples) // 2]
+
+
+def decode_tag_chars(text: str) -> str:
+    """Unicode tag characters (U+E0000-U+E007F) mirror ASCII; decode them to reveal the hidden message."""
+    return "".join(chr(ord(c) - 0xE0000) for c in text if 0xE0020 <= ord(c) <= 0xE007E)
+
+
+def find_invisible_unicode(text: str) -> tuple[list[str], str]:
+    names = sorted({INVISIBLE_CHARS[c] for c in text if c in INVISIBLE_CHARS})
+    tags = decode_tag_chars(text)
+    if any(0xE0000 <= ord(c) <= 0xE007F for c in text):
+        names.append("UNICODE TAG CHARACTERS")
+    return names, tags
+
+
+def _overlap_ratio(a: pymupdf.Rect, b: pymupdf.Rect) -> float:
+    if a.is_empty or a.get_area() == 0:
+        return 0.0
+    inter = pymupdf.Rect(a) & b
+    return 0.0 if inter.is_empty else inter.get_area() / a.get_area()
+
+
+def _invisible_trace_rects(page: pymupdf.Page) -> list[pymupdf.Rect]:
+    """Rects of text drawn with render mode 3 (invisible) or zero opacity. Skips gracefully if unsupported."""
+    try:
+        return [
+            pymupdf.Rect(t["bbox"])
+            for t in page.get_texttrace()
+            if t.get("type") == 3 or t.get("opacity", 1) == 0
+        ]
+    except Exception:
+        return []
+
+
+def _span_techniques(span, page_rect, pix, scale, invisible_rects) -> tuple[list[str], str]:
+    """Return (techniques, extra detail) for one span."""
+    bbox = pymupdf.Rect(span["bbox"])
+    techniques, details = [], []
+
+    if span.get("alpha", 255) == 0 or any(_overlap_ratio(bbox, r) > 0.5 for r in invisible_rects):
+        techniques.append("invisible_render")
+
+    if _overlap_ratio(bbox, page_rect) < 0.5:
+        techniques.append("off_page")
+        details.append(f"bbox {tuple(round(v) for v in bbox)} vs page {tuple(round(v) for v in page_rect)}")
+    else:
+        fg = _rgb(span["color"])
+        bg = _background_color(pix, bbox, scale) if pix else None
+        if bg is not None:
+            ratio = _contrast(fg, bg)
+            if ratio < LOW_CONTRAST_RATIO:
+                techniques.append("white_text")
+                details.append(f"text color rgb{fg} on background rgb{tuple(bg)}, contrast {ratio:.2f}:1")
+        elif all(c > WHITE_THRESHOLD for c in fg):
+            techniques.append("white_text")
+            details.append(f"text color rgb{fg}")
+
+    if span["size"] < TINY_FONT_PT:
+        techniques.append("tiny_font")
+        details.append(f"font size {span['size']:.1f}pt")
+
+    techniques.sort(key=PRIORITY.index)
+    return techniques, "; ".join(details)
+
+
+def _make_flag(page_no, text, technique, bbox, extra_reason="", also=None):
+    classification, cls_reason = classify(text, technique)
+    reason = TECHNIQUE_REASONS[technique].format(pt=TINY_FONT_PT)
+    if extra_reason:
+        reason += f" ({extra_reason})"
+    if also:
+        reason += f" Also: {', '.join(also)}."
+    reason += " " + cls_reason
+    return {
+        "id": uuid.uuid4().hex[:8],
+        "page": page_no,
+        "text": text.strip(),
+        "technique": technique,
+        "classification": classification,
+        "reason": reason,
+        "bbox": [round(v, 1) for v in bbox] if bbox is not None else None,
+    }
+
+
+def scan_page(page: pymupdf.Page, page_no: int) -> list[dict]:
+    flags = []
+    # Don't clip to the mediabox, otherwise off-page text is silently dropped.
+    text_flags = pymupdf.TEXTFLAGS_DICT & ~pymupdf.TEXT_MEDIABOX_CLIP
+    data = page.get_text("dict", flags=text_flags, clip=pymupdf.INFINITE_RECT())
+    scale = 1.0
+    try:
+        pix = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
+    except Exception:
+        pix = None
+    invisible_rects = _invisible_trace_rects(page)
+
+    for block in data["blocks"]:
+        if block.get("type") != 0:
+            continue
+        run = None  # current merged run: {technique, text, bbox, details, also}
+
+        def close_run():
+            nonlocal run
+            if run and run["text"].strip():
+                flags.append(_make_flag(page_no, run["text"], run["technique"], run["bbox"],
+                                        "; ".join(dict.fromkeys(d for d in run["details"] if d)),
+                                        sorted(run["also"])))
+            run = None
+
+        for line in block["lines"]:
+            line_text = "".join(s["text"] for s in line["spans"])
+            names, tags = find_invisible_unicode(line_text)
+            if names:
+                shown, extra = line_text, "found: " + ", ".join(names)
+                if tags:
+                    extra += f'; decoded hidden tag text: "{tags}"'
+                    shown = f"{line_text}\n[decoded tag text] {tags}"
+                flag = _make_flag(page_no, shown, "invisible_unicode", pymupdf.Rect(line["bbox"]), extra)
+                if tags:  # classify on the decoded message, which is what an AI would read
+                    flag["classification"], _ = classify(tags, "invisible_unicode")
+                flags.append(flag)
+            for span in line["spans"]:
+                text = span["text"]
+                if not text.strip() or all(c in INVISIBLE_CHARS or ord(c) >= 0xE0000 for c in text.strip()):
+                    continue  # blank, or only invisible chars (already covered by the line-level flag)
+
+                techniques, detail = _span_techniques(span, page.rect, pix, scale, invisible_rects)
+                if not techniques:
+                    close_run()
+                    continue
+                primary = techniques[0]
+                if run and run["technique"] == primary:
+                    run["text"] += ("" if run["text"].endswith(" ") else " ") + text
+                    run["bbox"] |= pymupdf.Rect(span["bbox"])
+                    run["details"].append(detail)
+                    run["also"].update(techniques[1:])
+                else:
+                    close_run()
+                    run = {"technique": primary, "text": text, "bbox": pymupdf.Rect(span["bbox"]),
+                           "details": [detail], "also": set(techniques[1:])}
+        close_run()
+    return flags
+
+
+def scan_metadata(doc: pymupdf.Document) -> list[dict]:
+    flags = []
+    for key, value in (doc.metadata or {}).items():
+        if not value or not isinstance(value, str) or key in ("format", "encryption", "creationDate", "modDate"):
+            continue
+        classification, _ = classify(value, "metadata")
+        names, tags = find_invisible_unicode(value)
+        # Plain short metadata (e.g. a normal title/author) is expected; only flag if it looks off.
+        if classification == "manipulation" or names or len(value) > 200:
+            flag = _make_flag(0, f"[{key}] {value}", "metadata", None, f"field: {key}")
+            flags.append(flag)
+    return flags
+
+
+def scan_pdf(data: bytes, filename: str) -> dict:
+    doc = pymupdf.open(stream=data, filetype="pdf")
+    flags = scan_metadata(doc)
+    for i, page in enumerate(doc):
+        flags.extend(scan_page(page, i + 1))
+
+    by_technique: dict[str, int] = {}
+    for f in flags:
+        by_technique[f["technique"]] = by_technique.get(f["technique"], 0) + 1
+
+    risk = "clean"
+    worst = max((SEVERITY[f["classification"]] for f in flags), default=0)
+    if worst == 2:
+        risk = "manipulation"
+    elif worst == 1:
+        risk = "suspicious"
+
+    result = {
+        "filename": filename,
+        "page_count": doc.page_count,
+        "risk": risk,
+        "summary": {"total_flags": len(flags), "by_technique": by_technique},
+        "flags": flags,
+    }
+    doc.close()
+    return result
