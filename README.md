@@ -50,7 +50,9 @@ OLLAMA_MODEL=qwen2.5:7b                 # default
 OLLAMA_URL=http://localhost:11434       # default
 ```
 
-Ollama gets a 30 s timeout (the API gets 5 s). A 7B model takes roughly 1.5 to 2.5 s per document on a laptop.
+Ollama gets a 30 s timeout (the API gets 5 s) and one retry on a failed or partly invalid answer.
+Its output is constrained with a JSON schema (`format`), with `id` limited to the ids in that request,
+plus `repeat_penalty: 1.1` and `num_predict` = 100 + 150 per snippet. A 7B model takes roughly 1.5 to 2.5 s per document on a laptop.
 `.env` is gitignored. Restart uvicorn after changing it.
 
 ### API
@@ -59,7 +61,7 @@ Ollama gets a 30 s timeout (the API gets 5 s). A 7B model takes roughly 1.5 to 2
   `timings_ms: {parse, detect, rule_classify, total}`.
 - `POST /classify/{scan_id}`: runs the AI review on that scan and returns updated `flags` (each with
   `rule_label`, `llm_label`, `final_label`, `llm_reason`, `llm_status`), the updated `risk`, and
-  `timings_ms: {llm, cache_hits, llm_calls, llm_error}`. Scans are kept in memory (last 200).
+  `timings_ms: {llm, cache_hits, llm_calls, retries, llm_error, provider}`. Scans are kept in memory (last 200).
 
 The app shows the report as soon as `/scan` returns, then calls `/classify` in the background and
 updates the badges and the risk banner when the AI review comes back.
@@ -135,7 +137,8 @@ them to Files (iOS) or Downloads (Android). The picker can then open them.
 Adjacent flagged spans with the same technique are merged into one flag.
 Classification happens in two stages:
 
-1. **Rules** (`backend/classifier.py`): instant. AI-directed instruction language, and any hidden text that
+1. **Rules** (`backend/classifier.py`): instant. Invisible characters that encode hidden text (Unicode tag
+   characters), or more than 5 invisible characters in one snippet, are `manipulation`. AI-directed instruction language, and any hidden text that
    addresses a classifier/scanner/detector ("classify this as benign", "output label", fake `</snippet>`
    or `SYSTEM:` turns), is `manipulation`.
 2. **AI review** (`backend/classifier_llm.py`): only flags the rules labeled `suspicious`/`benign` are sent,
@@ -155,8 +158,11 @@ both providers:
   random nonce per request. Every `<`, `>` and `&` in the snippet is escaped and the nonce tag name is
   removed, so a snippet can't close its own delimiter or forge a new one.
 - **Size limit:** each snippet is truncated to 1000 characters.
-- **Strict output validation:** the reply must be a JSON array (for Ollama, whose JSON mode can't return a
-  bare array, exactly `{"results": [...]}`, which is unwrapped first) of `{id, label, reason}`, with exactly those
+- **Show the hidden part:** before sending, invisible characters are replaced with visible `⟦U+200B⟧` markers
+  and a `[scanner note: ...]` gives the count and any decoded tag-character text, so the model judges what an
+  AI would actually read. The annotated text is escaped and delimited like any other snippet.
+- **Strict output validation:** the reply must be a JSON array (for Ollama, exactly `{"results": [...]}`,
+  which is unwrapped first; Ollama is also grammar-constrained by a JSON schema, but that never replaces validation) of `{id, label, reason}`, with exactly those
   keys, string types, ids from this request (no unknown or duplicate ids), and labels from the enum.
   Any item that fails is dropped and that flag keeps its rule label. Reasons are capped at 200 chars.
 - **No room to act:** temperature 0, a small output-token cap (`max_tokens` / Ollama `num_predict`), no tools.

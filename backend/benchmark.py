@@ -48,6 +48,8 @@ def run_pass(pdfs: list[Path], classifier) -> list[dict]:
             "cache_hits": llm["cache_hits"],
             "final_risk": llm["risk"],
             "_llm_calls": llm["llm_calls"],
+            "_retries": llm["retries"],
+            "_flags": scan["flags"],
             "_llm_error": llm["llm_error"],
         })
     return rows
@@ -64,8 +66,26 @@ def print_table(title: str, rows: list[dict]) -> None:
     print("-" * len(line))
     print("  ".join((f"{avg[f]}" if f in avg else ("AVERAGE" if f == "provider" else "")).ljust(widths[f]) for f in FIELDS))
     calls = sum(r["_llm_calls"] for r in rows)
+    retries = sum(r["_retries"] for r in rows)
     errors = sorted({r["_llm_error"] for r in rows if r["_llm_error"]})
-    print(f"LLM calls: {calls}" + (f"   LLM errors: {'; '.join(errors)}" if errors else ""))
+    print(f"LLM calls: {calls}   retries: {retries}" + (f"   LLM errors: {'; '.join(errors)}" if errors else ""))
+
+
+def print_flags(rows: list[dict]) -> None:
+    """One line per flag: what the rules said, what the LLM said, and what the report shows."""
+    print("\nPer-flag labels (pass 1)")
+    cols = ["file", "technique", "text", "rule", "ai", "final", "status", "ai_reason"]
+    lines = []
+    for r in rows:
+        for f in r["_flags"]:
+            text = f["text"].encode("unicode_escape").decode()[:44]  # make invisible chars visible here too
+            lines.append([r["filename"].removesuffix(".pdf"), f["technique"], text, f["rule_label"],
+                          f["llm_label"] or "-", f["final_label"], f["llm_status"], (f["llm_reason"] or "")[:70]])
+    widths = [max(len(c), *(len(l[i]) for l in lines)) for i, c in enumerate(cols)] if lines else [len(c) for c in cols]
+    print("  ".join(c.ljust(w) for c, w in zip(cols, widths)))
+    print("-" * (sum(widths) + 2 * len(widths)))
+    for l in lines:
+        print("  ".join(v.ljust(w) for v, w in zip(l, widths)))
 
 
 def main():
@@ -85,6 +105,7 @@ def main():
     classifier_llm.clear_cache()
     cold = run_pass(pdfs, classifier)
     print_table(f"Pass 1: cold cache ({mode})", cold)
+    print_flags(cold)
     with open(args.csv, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=FIELDS, extrasaction="ignore")
         w.writeheader()

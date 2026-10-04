@@ -4,20 +4,13 @@ import uuid
 
 import pymupdf
 
-from classifier import classify, compute_risk
+from classifier import classify, classify_invisible, compute_risk
+from invisible import INVISIBLE_CHARS, decode_tag_chars, is_tag_char
 
 TINY_FONT_PT = 4.0
 WHITE_THRESHOLD = 240
 LOW_CONTRAST_RATIO = 1.5  # WCAG contrast ratio; 1.0 = identical colors, 21 = black on white
 
-INVISIBLE_CHARS = {
-    "​": "ZERO WIDTH SPACE",
-    "‌": "ZERO WIDTH NON-JOINER",
-    "‍": "ZERO WIDTH JOINER",
-    "⁠": "WORD JOINER",
-    "﻿": "ZERO WIDTH NO-BREAK SPACE",
-    "­": "SOFT HYPHEN",
-}
 
 # Priority when a span triggers several techniques at once.
 PRIORITY = ["invisible_render", "off_page", "white_text", "tiny_font"]
@@ -66,15 +59,10 @@ def _background_color(pix: pymupdf.Pixmap, bbox: pymupdf.Rect, scale: float):
     return samples[len(samples) // 2]
 
 
-def decode_tag_chars(text: str) -> str:
-    """Unicode tag characters (U+E0000-U+E007F) mirror ASCII; decode them to reveal the hidden message."""
-    return "".join(chr(ord(c) - 0xE0000) for c in text if 0xE0020 <= ord(c) <= 0xE007E)
-
-
 def find_invisible_unicode(text: str) -> tuple[list[str], str]:
     names = sorted({INVISIBLE_CHARS[c] for c in text if c in INVISIBLE_CHARS})
     tags = decode_tag_chars(text)
-    if any(0xE0000 <= ord(c) <= 0xE007F for c in text):
+    if any(is_tag_char(c) for c in text):
         names.append("UNICODE TAG CHARACTERS")
     return names, tags
 
@@ -224,6 +212,9 @@ def rule_classify(flags: list[dict]) -> None:
     """Attach rule-based labels in place. `classification` is the label the app shows (final label)."""
     for f in flags:
         label, why = classify(f.pop("_classify_text", f["text"]), f["technique"])
+        invisible = classify_invisible(f["text"])  # raw text, invisible chars intact
+        if invisible and label != "manipulation":
+            label, why = invisible
         f["reason"] += " " + why
         f["classification"] = f["rule_label"] = f["final_label"] = label
         f["llm_label"] = None

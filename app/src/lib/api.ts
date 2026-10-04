@@ -46,7 +46,14 @@ export interface ClassifyResult {
   scan_id: string;
   risk: Risk;
   flags: Flag[];
-  timings_ms: { llm: number; cache_hits: number; llm_calls: number; llm_error: string | null };
+  timings_ms: {
+    llm: number;
+    cache_hits: number;
+    llm_calls: number;
+    retries: number;
+    llm_error: string | null;
+    provider: string | null;
+  };
 }
 
 export interface PickedFile {

@@ -5,6 +5,8 @@ Swap `classify` for an LLM judge later: keep the same signature
 """
 import re
 
+from invisible import count_invisible, decode_tag_chars
+
 MANIPULATION_PATTERNS = [
     r"ignore (all )?(previous|prior|above)",
     r"ignore all",
@@ -64,6 +66,22 @@ def max_severity(a: str, b: str | None) -> str:
 def compute_risk(labels) -> str:
     worst = max((SEVERITY[l] for l in labels), default=0)
     return {0: "clean", 1: "suspicious", 2: "manipulation"}[worst]
+
+
+MAX_BENIGN_INVISIBLE = 5  # a stray zero-width char or soft hyphen happens; more than this in one snippet doesn't
+
+
+def classify_invisible(raw_text: str) -> tuple[str, str] | None:
+    """Rule for invisible Unicode, run on the raw text (with the invisible chars still in it).
+    Hidden tag-character text is an encoded message by construction; a dense cluster of zero-width
+    chars is a watermark/fingerprint or a smuggled payload. Either way it's deliberate."""
+    decoded = decode_tag_chars(raw_text)
+    if decoded.strip():
+        return "manipulation", f'Invisible tag characters encode hidden text ("{decoded[:80]}").'
+    n = count_invisible(raw_text)
+    if n > MAX_BENIGN_INVISIBLE:
+        return "manipulation", f"{n} invisible characters in one snippet (more than {MAX_BENIGN_INVISIBLE})."
+    return None
 
 
 def classify(text: str, technique: str) -> tuple[str, str]:
