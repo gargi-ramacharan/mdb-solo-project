@@ -1,0 +1,9 @@
+filename,pages,num_flags,parse_ms,detect_ms,llm_ms,total_ms,cache_hits,final_risk
+benign_hidden.pdf,1,2,0.25,6.97,603.91,611.15,0,suspicious
+classifier_attack_1.pdf,1,1,1.2,13.86,0.0,15.09,0,manipulation
+classifier_attack_2.pdf,1,1,0.45,6.44,0.0,6.91,0,manipulation
+classifier_attack_3.pdf,1,1,0.31,5.65,610.13,616.13,0,suspicious
+clean_paper.pdf,1,0,1.12,9.66,0.0,10.79,0,clean
+offpage_trick.pdf,1,2,0.2,2.1,0.0,2.34,0,manipulation
+poisoned_paper.pdf,1,1,0.15,4.73,0.0,4.91,0,manipulation
+poisoned_resume.pdf,1,3,0.2,5.84,602.14,608.26,0,manipulation

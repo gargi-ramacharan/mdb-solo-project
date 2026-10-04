@@ -10,7 +10,7 @@ const STEPS = ["Extracting text", "Checking styles", "Classifying"];
 const STEP_MS = 700; // minimum time per step so the demo is readable even on a fast backend
 
 export default function Scanning() {
-  const { file, setResult } = useScan();
+  const { file, setResult, startAiReview } = useScan();
   const [step, setStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const started = useRef(false);
@@ -29,13 +29,14 @@ export default function Scanning() {
     Promise.all([scanPdf(file), minDelay])
       .then(([result]) => {
         setResult(result);
+        startAiReview(result.scan_id); // report shows rule labels now; AI labels fill in later
         router.replace("/report");
       })
       .catch((e) => setError(e?.message ?? "Scan failed"))
       .finally(() => clearInterval(timer));
 
     return () => clearInterval(timer);
-  }, [file, setResult]);
+  }, [file, setResult, startAiReview]);
 
   if (error) {
     return (

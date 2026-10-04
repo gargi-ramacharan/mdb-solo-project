@@ -1,9 +1,10 @@
 """PDF hidden-text detection using PyMuPDF."""
+import time
 import uuid
 
 import pymupdf
 
-from classifier import SEVERITY, classify
+from classifier import classify, compute_risk
 
 TINY_FONT_PT = 4.0
 WHITE_THRESHOLD = 240
@@ -129,19 +130,17 @@ def _span_techniques(span, page_rect, pix, scale, invisible_rects) -> tuple[list
 
 
 def _make_flag(page_no, text, technique, bbox, extra_reason="", also=None):
-    classification, cls_reason = classify(text, technique)
+    """Detection only; labels are added later by rule_classify() so its cost can be timed separately."""
     reason = TECHNIQUE_REASONS[technique].format(pt=TINY_FONT_PT)
     if extra_reason:
         reason += f" ({extra_reason})"
     if also:
         reason += f" Also: {', '.join(also)}."
-    reason += " " + cls_reason
     return {
         "id": uuid.uuid4().hex[:8],
         "page": page_no,
         "text": text.strip(),
         "technique": technique,
-        "classification": classification,
         "reason": reason,
         "bbox": [round(v, 1) for v in bbox] if bbox is not None else None,
     }
@@ -182,7 +181,7 @@ def scan_page(page: pymupdf.Page, page_no: int) -> list[dict]:
                     shown = f"{line_text}\n[decoded tag text] {tags}"
                 flag = _make_flag(page_no, shown, "invisible_unicode", pymupdf.Rect(line["bbox"]), extra)
                 if tags:  # classify on the decoded message, which is what an AI would read
-                    flag["classification"], _ = classify(tags, "invisible_unicode")
+                    flag["_classify_text"] = tags
                 flags.append(flag)
             for span in line["spans"]:
                 text = span["text"]
@@ -221,29 +220,47 @@ def scan_metadata(doc: pymupdf.Document) -> list[dict]:
     return flags
 
 
+def rule_classify(flags: list[dict]) -> None:
+    """Attach rule-based labels in place. `classification` is the label the app shows (final label)."""
+    for f in flags:
+        label, why = classify(f.pop("_classify_text", f["text"]), f["technique"])
+        f["reason"] += " " + why
+        f["classification"] = f["rule_label"] = f["final_label"] = label
+        f["llm_label"] = None
+        f["llm_reason"] = None
+        f["llm_status"] = "pending"
+
+
 def scan_pdf(data: bytes, filename: str) -> dict:
+    t0 = time.perf_counter()
     doc = pymupdf.open(stream=data, filetype="pdf")
+    t_parse = time.perf_counter()
+
     flags = scan_metadata(doc)
     for i, page in enumerate(doc):
         flags.extend(scan_page(page, i + 1))
+    t_detect = time.perf_counter()
+
+    rule_classify(flags)
+    t_classify = time.perf_counter()
 
     by_technique: dict[str, int] = {}
     for f in flags:
         by_technique[f["technique"]] = by_technique.get(f["technique"], 0) + 1
 
-    risk = "clean"
-    worst = max((SEVERITY[f["classification"]] for f in flags), default=0)
-    if worst == 2:
-        risk = "manipulation"
-    elif worst == 1:
-        risk = "suspicious"
-
+    ms = lambda a, b: round((b - a) * 1000, 2)
     result = {
         "filename": filename,
         "page_count": doc.page_count,
-        "risk": risk,
+        "risk": compute_risk(f["final_label"] for f in flags),
         "summary": {"total_flags": len(flags), "by_technique": by_technique},
         "flags": flags,
+        "timings_ms": {
+            "parse": ms(t0, t_parse),
+            "detect": ms(t_parse, t_detect),
+            "rule_classify": ms(t_detect, t_classify),
+            "total": ms(t0, time.perf_counter()),
+        },
     }
     doc.close()
     return result

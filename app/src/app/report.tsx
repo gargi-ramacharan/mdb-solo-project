@@ -1,6 +1,6 @@
 import { router } from "expo-router";
 import { useEffect } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { Badge } from "../lib/Badge";
 import { useScan } from "../lib/store";
@@ -8,7 +8,7 @@ import { classColor, colors, mono, riskStyle, techniqueLabel } from "../lib/them
 import type { Technique } from "../lib/api";
 
 export default function Report() {
-  const { result } = useScan();
+  const { result, ai, aiTimings } = useScan();
 
   useEffect(() => {
     if (!result) router.replace("/");
@@ -17,7 +17,8 @@ export default function Report() {
 
   const risk = riskStyle[result.risk];
   const counts = { manipulation: 0, suspicious: 0, benign: 0 };
-  result.flags.forEach((f) => counts[f.classification]++);
+  result.flags.forEach((f) => counts[f.final_label]++);
+  const aiUnavailable = ai === "error" || (ai === "done" && result.flags.some((f) => f.llm_status === "unavailable"));
 
   return (
     <ScrollView style={{ backgroundColor: colors.bg }} contentContainerStyle={styles.container}>
@@ -38,6 +39,24 @@ export default function Report() {
         </View>
       </View>
 
+      <View style={styles.aiRow}>
+        {ai === "pending" && <ActivityIndicator size="small" color={colors.accent} />}
+        <Text style={styles.aiText}>
+          {ai === "pending"
+            ? "AI review in progress…"
+            : aiUnavailable
+              ? "AI review unavailable (rule-based only)"
+              : ai === "done"
+                ? "AI review complete"
+                : ""}
+        </Text>
+      </View>
+      <Text style={styles.timing}>
+        Scan {Math.round(result.timings_ms.total)} ms
+        {aiTimings && ` · AI review ${Math.round(aiTimings.llm)} ms`}
+        {aiTimings && aiTimings.cache_hits > 0 && ` (${aiTimings.cache_hits} cached)`}
+      </Text>
+
       {Object.keys(result.summary.by_technique).length > 0 && (
         <View style={styles.chips}>
           {(Object.entries(result.summary.by_technique) as [Technique, number][]).map(([t, n]) => (
@@ -57,14 +76,14 @@ export default function Report() {
           <Pressable
             key={f.id}
             onPress={() => router.push({ pathname: "/flag/[id]", params: { id: f.id } })}
-            style={({ pressed }) => [styles.card, { borderLeftColor: classColor[f.classification] }, pressed && { opacity: 0.7 }]}
+            style={({ pressed }) => [styles.card, { borderLeftColor: classColor[f.final_label] }, pressed && { opacity: 0.7 }]}
           >
             <Text style={styles.cardText} numberOfLines={3}>
               {f.text}
             </Text>
             <View style={styles.cardMeta}>
               <Badge label={techniqueLabel[f.technique] ?? f.technique} color={colors.accent} />
-              <Badge label={f.classification} color={classColor[f.classification]} filled />
+              <Badge label={f.final_label} color={classColor[f.final_label]} filled />
               <Text style={styles.page}>{f.technique === "metadata" ? "metadata" : `p. ${f.page}`}</Text>
             </View>
           </Pressable>
@@ -86,6 +105,9 @@ const styles = StyleSheet.create({
   bannerTitle: { fontSize: 22, fontWeight: "800" },
   bannerSub: { color: colors.text, fontSize: 13, marginTop: 2, fontFamily: mono },
   bannerCounts: { color: colors.muted, fontSize: 12, marginTop: 6 },
+  aiRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 12, minHeight: 20 },
+  aiText: { color: colors.muted, fontSize: 13 },
+  timing: { color: colors.muted, opacity: 0.8, fontSize: 11, marginTop: 2, fontFamily: mono },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 16 },
   chip: { backgroundColor: colors.surfaceAlt, borderRadius: 999, paddingVertical: 6, paddingHorizontal: 12, borderWidth: 1, borderColor: colors.border },
   chipText: { color: colors.text, fontSize: 12, fontWeight: "600" },

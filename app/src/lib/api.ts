@@ -13,22 +13,40 @@ export type Technique =
 export type Classification = "manipulation" | "suspicious" | "benign";
 export type Risk = "clean" | "suspicious" | "manipulation";
 
+// pending: AI review not run yet · ok/cached: AI label applied · skipped: rules already say manipulation
+// invalid: AI answer failed validation · unavailable: no key / API error (rule-based only)
+export type LlmStatus = "pending" | "ok" | "cached" | "skipped" | "invalid" | "unavailable";
+
 export interface Flag {
   id: string;
   page: number;
   text: string;
   technique: Technique;
-  classification: Classification;
+  classification: Classification; // same as final_label
+  rule_label: Classification;
+  llm_label: Classification | null;
+  final_label: Classification;
+  llm_reason: string | null;
+  llm_status: LlmStatus;
   reason: string;
   bbox: [number, number, number, number] | null;
 }
 
 export interface ScanResult {
+  scan_id: string;
   filename: string;
   page_count: number;
   risk: Risk;
   summary: { total_flags: number; by_technique: Partial<Record<Technique, number>> };
   flags: Flag[];
+  timings_ms: { parse: number; detect: number; rule_classify: number; total: number };
+}
+
+export interface ClassifyResult {
+  scan_id: string;
+  risk: Risk;
+  flags: Flag[];
+  timings_ms: { llm: number; cache_hits: number; llm_calls: number; llm_error: string | null };
 }
 
 export interface PickedFile {
@@ -80,5 +98,11 @@ export async function scanPdf(file: PickedFile): Promise<ScanResult> {
     } catch {}
     throw new Error(detail);
   }
+  return res.json();
+}
+
+export async function classifyScan(scanId: string): Promise<ClassifyResult> {
+  const res = await fetch(`${BACKEND_URL}/classify/${scanId}`, { method: "POST" });
+  if (!res.ok) throw new Error(`AI review failed (${res.status})`);
   return res.json();
 }

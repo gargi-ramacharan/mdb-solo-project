@@ -18,7 +18,7 @@ function revealInvisible(text: string) {
 
 export default function FlagDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { result } = useScan();
+  const { result, ai } = useScan();
   const flag = result?.flags.find((f) => f.id === id);
 
   if (!flag) {
@@ -29,13 +29,23 @@ export default function FlagDetail() {
     );
   }
 
-  const color = classColor[flag.classification];
+  const color = classColor[flag.final_label];
+  const aiLabel =
+    flag.llm_label ??
+    ({
+      pending: ai === "error" ? "unavailable (rule-based only)" : "review in progress…",
+      skipped: "not needed (rules already confirmed)",
+      invalid: "answer rejected (rule-based only)",
+      unavailable: "unavailable (rule-based only)",
+      ok: "—",
+      cached: "—",
+    } as const)[flag.llm_status];
 
   return (
     <ScrollView style={{ backgroundColor: colors.bg }} contentContainerStyle={styles.container}>
       <View style={styles.badges}>
         <Badge label={techniqueLabel[flag.technique] ?? flag.technique} color={colors.accent} />
-        <Badge label={flag.classification} color={color} filled />
+        <Badge label={flag.final_label} color={color} filled />
       </View>
 
       <Text style={styles.label}>HIDDEN TEXT</Text>
@@ -48,9 +58,23 @@ export default function FlagDetail() {
       <Text style={styles.label}>WHY IT WAS FLAGGED</Text>
       <Text style={styles.reason}>{flag.reason}</Text>
 
+      <Text style={styles.label}>CLASSIFICATION</Text>
+      <View style={styles.gridTight}>
+        <Field label="RULE LABEL" value={flag.rule_label} valueColor={classColor[flag.rule_label]} />
+        <Field label="AI LABEL" value={aiLabel} valueColor={flag.llm_label ? classColor[flag.llm_label] : undefined} />
+        <Field label="FINAL LABEL" value={flag.final_label} valueColor={color} />
+      </View>
+      {flag.llm_reason && (
+        <>
+          <Text style={styles.label}>AI REASON</Text>
+          <Text style={styles.reason}>{flag.llm_reason}</Text>
+        </>
+      )}
+      {flag.llm_status === "unavailable" && <Text style={styles.note}>AI review unavailable (rule-based only)</Text>}
+      <Text style={styles.note}>The AI can raise a label but never lower it.</Text>
+
       <View style={styles.grid}>
         <Field label="TECHNIQUE" value={flag.technique} />
-        <Field label="CLASSIFICATION" value={flag.classification} valueColor={color} />
         <Field label="PAGE" value={flag.technique === "metadata" ? "— (metadata)" : String(flag.page)} />
         <Field label="BBOX" value={flag.bbox ? `[${flag.bbox.map((v) => v.toFixed(1)).join(", ")}]` : "null"} />
       </View>
@@ -74,6 +98,8 @@ const styles = StyleSheet.create({
   textBox: { backgroundColor: colors.surface, borderWidth: 1, borderRadius: 12, padding: 16 },
   hiddenText: { color: colors.text, fontFamily: mono, fontSize: 15, lineHeight: 22 },
   reason: { color: colors.text, fontSize: 14, lineHeight: 21 },
+  gridTight: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  note: { color: colors.muted, fontSize: 12, marginTop: 8 },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 24 },
   field: { backgroundColor: colors.surface, borderRadius: 10, padding: 12, borderWidth: 1, borderColor: colors.border, flexGrow: 1, flexBasis: "45%" },
   fieldLabel: { color: colors.muted, fontSize: 10, fontWeight: "700", letterSpacing: 1 },

@@ -31,13 +31,47 @@ MANIPULATION_PATTERNS = [
     r"new instructions",
 ]
 
+# Hidden text that talks to the classifier/scanner itself is an attack on the detection
+# pipeline, so it is always "manipulation" -- including attempts to fake our LLM prompt's delimiters.
+CLASSIFIER_ADDRESSING_PATTERNS = [
+    # Phrased as *addressing* a detector, so ordinary topic words ("document classification") don't fire.
+    r"\b(note to|attention|dear|to) (any |the |all )?(ai |automated )?(classifier|scanner|detector)s?\b",
+    r"\b(ai|llm|automated) (classifier|scanner|detector)s?\b",
+    r"\bclassify (this|it|them|everything|all|me|as)\b",
+    r"\blabel (this|it|them|everything|all|as)\b",
+    r"\boutput (the )?label",
+    r"\bmark (this|it) as\b",
+    r"\b(this|it) is (benign|safe|harmless|not malicious)\b",
+    r"\bnot (a )?prompt injection",
+    r"\bignore (your|the) (instructions|rules|system)",
+    r"</?\s*snippet",
+    r"\bsystem\s*:",
+]
+
 ACCESSIBILITY_HINTS = ["alt text", "image of", "figure", "logo", "decorative", "page ", "header", "footer"]
 
 SEVERITY = {"benign": 0, "suspicious": 1, "manipulation": 2}
+LABELS = tuple(SEVERITY)
+
+
+def max_severity(a: str, b: str | None) -> str:
+    """Higher-severity label of the two; None (no second opinion) keeps `a`."""
+    if b not in SEVERITY:
+        return a
+    return a if SEVERITY[a] >= SEVERITY[b] else b
+
+
+def compute_risk(labels) -> str:
+    worst = max((SEVERITY[l] for l in labels), default=0)
+    return {0: "clean", 1: "suspicious", 2: "manipulation"}[worst]
 
 
 def classify(text: str, technique: str) -> tuple[str, str]:
     lowered = text.lower()
+    for p in CLASSIFIER_ADDRESSING_PATTERNS:
+        m = re.search(p, lowered)
+        if m:
+            return "manipulation", f'Hidden text addresses the classifier/scanner itself (matched "{m.group(0)}").'
     hits = [p for p in MANIPULATION_PATTERNS if re.search(p, lowered)]
     if hits:
         phrase = re.search(hits[0], lowered).group(0)
