@@ -30,6 +30,15 @@ export interface Flag {
   llm_status: LlmStatus;
   reason: string;
   bbox: [number, number, number, number] | null;
+  overlay_bbox: [number, number, number, number] | null; // bbox clamped inside the page (PDF points); null = no box
+  off_page: boolean; // text sits (partly) outside the page; the box marks the edge it overflows
+}
+
+export interface PagePreview {
+  page: number;
+  width: number; // PDF points
+  height: number;
+  image_url: string; // relative to BACKEND_URL
 }
 
 export interface ScanResult {
@@ -39,7 +48,8 @@ export interface ScanResult {
   risk: Risk;
   summary: { total_flags: number; by_technique: Partial<Record<Technique, number>> };
   flags: Flag[];
-  timings_ms: { parse: number; detect: number; rule_classify: number; total: number };
+  pages: PagePreview[];
+  timings_ms: { parse: number; detect: number; rule_classify: number; render?: number; total: number };
 }
 
 export interface ClassifyResult {
@@ -112,4 +122,8 @@ export async function classifyScan(scanId: string): Promise<ClassifyResult> {
   const res = await fetch(`${BACKEND_URL}/classify/${scanId}`, { method: "POST" });
   if (!res.ok) throw new Error(`AI review failed (${res.status})`);
   return res.json();
+}
+
+export function pageImageUrl(p: PagePreview): string {
+  return `${BACKEND_URL}${p.image_url}`;
 }

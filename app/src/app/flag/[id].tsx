@@ -2,19 +2,9 @@ import { useLocalSearchParams } from "expo-router";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { Badge } from "../../lib/Badge";
+import { revealInvisible } from "../../lib/reveal";
 import { useScan } from "../../lib/store";
 import { classColor, colors, mono, techniqueLabel } from "../../lib/theme";
-
-// Make invisible characters visible so the demo audience can actually see them.
-function revealInvisible(text: string) {
-  return text
-    .replace(/​/g, "⟦ZWSP⟧")
-    .replace(/‌/g, "⟦ZWNJ⟧")
-    .replace(/‍/g, "⟦ZWJ⟧")
-    .replace(/⁠/g, "⟦WJ⟧")
-    .replace(/﻿/g, "⟦BOM⟧")
-    .replace(/­/g, "⟦SHY⟧");
-}
 
 export default function FlagDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();

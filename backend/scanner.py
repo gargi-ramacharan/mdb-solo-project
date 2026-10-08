@@ -222,7 +222,52 @@ def rule_classify(flags: list[dict]) -> None:
         f["llm_status"] = "pending"
 
 
-def scan_pdf(data: bytes, filename: str) -> dict:
+PREVIEW_ZOOM = 1.5
+OFF_PAGE_STRIP_PT = 8.0  # how thick the edge marker for fully off-page text is, in PDF points
+
+
+def overlay_box(bbox, technique: str, page_rect: pymupdf.Rect) -> tuple[list[float], bool]:
+    """Box to draw on the page preview, in PDF points, always inside the page.
+    Text that is (partly) off the page is clamped to the edge it overflows; text entirely off the page
+    becomes a thin strip on that edge. Returns (box, off_page)."""
+    x0, y0, x1, y1 = bbox
+    W, H = page_rect.width, page_rect.height
+    off_page = technique == "off_page" or x0 < 0 or y0 < 0 or x1 > W or y1 > H
+
+    def clamp_axis(a0, a1, size):
+        c0, c1 = min(max(a0, 0), size), min(max(a1, 0), size)
+        if c1 - c0 < OFF_PAGE_STRIP_PT and (a0 >= size or a1 <= 0):
+            # entirely past one edge: draw a strip along that edge
+            return (size - OFF_PAGE_STRIP_PT, size) if a0 >= size else (0, OFF_PAGE_STRIP_PT)
+        return c0, c1
+
+    cx0, cx1 = clamp_axis(x0, x1, W)
+    cy0, cy1 = clamp_axis(y0, y1, H)
+    return [round(v, 1) for v in (cx0, cy0, cx1, cy1)], off_page
+
+
+def render_flagged_pages(doc: pymupdf.Document, flags: list[dict], images: dict) -> list[dict]:
+    """Render each page that has a boxed flag to PNG (into `images`, keyed by page number) and give every
+    flag with a bbox an `overlay_bbox` / `off_page`. Flags without a bbox (metadata) get overlay_bbox None."""
+    pages = []
+    flagged = sorted({f["page"] for f in flags if f["bbox"] is not None and f["page"] >= 1})
+    for f in flags:
+        f["overlay_bbox"], f["off_page"] = None, False
+    for n in flagged:
+        page = doc[n - 1]
+        rect = page.rect
+        for f in flags:
+            if f["page"] == n and f["bbox"] is not None:
+                f["overlay_bbox"], f["off_page"] = overlay_box(f["bbox"], f["technique"], rect)
+        pix = page.get_pixmap(matrix=pymupdf.Matrix(PREVIEW_ZOOM, PREVIEW_ZOOM), alpha=False)
+        images[n] = pix.tobytes("png")
+        pages.append({"page": n, "width": round(rect.width, 1), "height": round(rect.height, 1)})
+    return pages
+
+
+def scan_pdf(data: bytes, filename: str, page_images: dict | None = None) -> dict:
+    """Scan a PDF. If `page_images` is a dict, flagged pages are also rendered into it as PNG bytes
+    (page number -> bytes) and the result gets a `pages` list for the preview overlay."""
     t0 = time.perf_counter()
     doc = pymupdf.open(stream=data, filetype="pdf")
     t_parse = time.perf_counter()
@@ -235,6 +280,9 @@ def scan_pdf(data: bytes, filename: str) -> dict:
     rule_classify(flags)
     t_classify = time.perf_counter()
 
+    pages = render_flagged_pages(doc, flags, page_images) if page_images is not None else []
+    t_render = time.perf_counter()
+
     by_technique: dict[str, int] = {}
     for f in flags:
         by_technique[f["technique"]] = by_technique.get(f["technique"], 0) + 1
@@ -246,6 +294,7 @@ def scan_pdf(data: bytes, filename: str) -> dict:
         "risk": compute_risk(f["final_label"] for f in flags),
         "summary": {"total_flags": len(flags), "by_technique": by_technique},
         "flags": flags,
+        "pages": pages,
         "timings_ms": {
             "parse": ms(t0, t_parse),
             "detect": ms(t_parse, t_detect),
@@ -253,5 +302,7 @@ def scan_pdf(data: bytes, filename: str) -> dict:
             "total": ms(t0, time.perf_counter()),
         },
     }
+    if page_images is not None:
+        result["timings_ms"]["render"] = ms(t_classify, t_render)
     doc.close()
     return result
