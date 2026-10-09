@@ -59,8 +59,20 @@ def _background_color(pix: pymupdf.Pixmap, bbox: pymupdf.Rect, scale: float):
     return samples[len(samples) // 2]
 
 
+def _is_layout_artifact(text: str, i: int) -> bool:
+    """A lone zero-width char at a word boundary (line edge or next to whitespace) hides nothing.
+    Google Docs exports put one after every line and bullet. Runs of several are still flagged,
+    since sequences of zero-width chars can encode a message."""
+    prev = text[i - 1] if i > 0 else " "
+    nxt = text[i + 1] if i + 1 < len(text) else " "
+    if prev in INVISIBLE_CHARS or nxt in INVISIBLE_CHARS:
+        return False
+    return prev.isspace() or nxt.isspace()
+
+
 def find_invisible_unicode(text: str) -> tuple[list[str], str]:
-    names = sorted({INVISIBLE_CHARS[c] for c in text if c in INVISIBLE_CHARS})
+    names = sorted({INVISIBLE_CHARS[c] for i, c in enumerate(text)
+                    if c in INVISIBLE_CHARS and not _is_layout_artifact(text, i)})
     tags = decode_tag_chars(text)
     if any(is_tag_char(c) for c in text):
         names.append("UNICODE TAG CHARACTERS")
