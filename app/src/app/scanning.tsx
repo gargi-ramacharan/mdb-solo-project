@@ -6,7 +6,7 @@ import { scanPdf } from "../lib/api";
 import { useScan } from "../lib/store";
 import { colors, mono } from "../lib/theme";
 
-const STEPS = ["Extracting text", "Checking styles", "Classifying"];
+const STEPS = ["Extracting text", "Checking styles", "Comparing with the rendered page", "Classifying"];
 const STEP_MS = 700; // minimum time per step so the demo is readable even on a fast backend
 
 export default function Scanning() {

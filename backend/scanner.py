@@ -6,6 +6,7 @@ import pymupdf
 
 from classifier import classify, classify_invisible, compute_risk
 from invisible import INVISIBLE_CHARS, decode_tag_chars, is_tag_char
+import visual_diff
 
 TINY_FONT_PT = 4.0
 WHITE_THRESHOLD = 240
@@ -22,6 +23,7 @@ TECHNIQUE_REASONS = {
     "tiny_font": "Font size is below {pt}pt, too small for a human to read.",
     "invisible_unicode": "Text contains zero-width / invisible Unicode characters that humans can't see but AI models read.",
     "metadata": "Document metadata contains text a reader never sees on the page but that AI tools may ingest.",
+    "visually_hidden": "Text is in the PDF's text layer but doesn't show up on the rendered page (OCR can't find it there), e.g. it is covered by a shape or image, or clipped away.",
 }
 
 
@@ -146,11 +148,16 @@ def _make_flag(page_no, text, technique, bbox, extra_reason="", also=None):
     }
 
 
-def scan_page(page: pymupdf.Page, page_no: int) -> list[dict]:
-    flags = []
-    # Don't clip to the mediabox, otherwise off-page text is silently dropped.
+def extract_text_dict(page: pymupdf.Page) -> dict:
+    """Text layer with span bboxes. Not clipped to the mediabox, otherwise off-page text is silently dropped."""
     text_flags = pymupdf.TEXTFLAGS_DICT & ~pymupdf.TEXT_MEDIABOX_CLIP
-    data = page.get_text("dict", flags=text_flags, clip=pymupdf.INFINITE_RECT())
+    return page.get_text("dict", flags=text_flags, clip=pymupdf.INFINITE_RECT())
+
+
+def scan_page(page: pymupdf.Page, page_no: int, data: dict | None = None) -> list[dict]:
+    flags = []
+    if data is None:
+        data = extract_text_dict(page)
     scale = 1.0
     try:
         pix = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
@@ -277,18 +284,48 @@ def render_flagged_pages(doc: pymupdf.Document, flags: list[dict], images: dict)
     return pages
 
 
-def scan_pdf(data: bytes, filename: str, page_images: dict | None = None) -> dict:
+def run_visual_diff(doc: pymupdf.Document, text_dicts: list[dict], flags: list[dict]) -> dict:
+    """OCR every page that has text and add "visually_hidden" flags in place. Returns the status
+    block for the result; OCR problems never fail the scan."""
+    try:
+        visual_diff.get_engine()
+    except visual_diff.OcrUnavailable as e:
+        return {"status": "unavailable", "error": str(e)}
+    pages = 0
+    try:
+        for i, page in enumerate(doc):
+            if not any(len(visual_diff.normalize(s["text"])) >= visual_diff.MIN_CHARS
+                       for b in text_dicts[i]["blocks"] if b.get("type") == 0
+                       for l in b["lines"] for s in l["spans"]):
+                continue  # no text layer worth checking: skip the OCR
+            flags.extend(visual_diff.visual_diff_page(page, i + 1, text_dicts[i], flags, _make_flag))
+            pages += 1
+    except visual_diff.OcrUnavailable as e:
+        return {"status": "unavailable", "error": str(e)}
+    return {"status": "ok", "pages_ocrd": pages}
+
+
+def scan_pdf(data: bytes, filename: str, page_images: dict | None = None, visual: bool = False) -> dict:
     """Scan a PDF. If `page_images` is a dict, flagged pages are also rendered into it as PNG bytes
-    (page number -> bytes) and the result gets a `pages` list for the preview overlay."""
+    (page number -> bytes) and the result gets a `pages` list for the preview overlay.
+    `visual=True` also runs the OCR visual diff (slower; the API turns it on by default)."""
     t0 = time.perf_counter()
     doc = pymupdf.open(stream=data, filetype="pdf")
     t_parse = time.perf_counter()
 
     flags = scan_metadata(doc)
+    text_dicts = []
     for i, page in enumerate(doc):
-        flags.extend(scan_page(page, i + 1))
+        text_dicts.append(extract_text_dict(page))
+        flags.extend(scan_page(page, i + 1, text_dicts[-1]))
+    for f in flags:
+        f["detected_by"] = ["style"]
     t_detect = time.perf_counter()
 
+    visual_status = run_visual_diff(doc, text_dicts, flags) if visual else {"status": "off"}
+    t_visual = time.perf_counter()
+
+    t_rules = time.perf_counter()
     rule_classify(flags)
     t_classify = time.perf_counter()
 
@@ -310,10 +347,13 @@ def scan_pdf(data: bytes, filename: str, page_images: dict | None = None) -> dic
         "timings_ms": {
             "parse": ms(t0, t_parse),
             "detect": ms(t_parse, t_detect),
-            "rule_classify": ms(t_detect, t_classify),
+            "rule_classify": ms(t_rules, t_classify),
             "total": ms(t0, time.perf_counter()),
         },
+        "visual_diff": visual_status,
     }
+    if visual:
+        result["timings_ms"]["visual_diff"] = ms(t_detect, t_visual)
     if page_images is not None:
         result["timings_ms"]["render"] = ms(t_classify, t_render)
     doc.close()

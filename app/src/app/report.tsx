@@ -71,8 +71,12 @@ export default function Report() {
                 : ""}
         </Text>
       </View>
+      {result.visual_diff?.status === "unavailable" && (
+        <Text style={styles.timing}>Visual diff unavailable: {result.visual_diff.error}</Text>
+      )}
       <Text style={styles.timing}>
         Scan {Math.round(result.timings_ms.total)} ms
+        {result.timings_ms.visual_diff != null && ` (visual diff ${Math.round(result.timings_ms.visual_diff)} ms)`}
         {aiTimings && ` · AI review ${Math.round(aiTimings.llm)} ms`}
         {aiTimings && aiTimings.cache_hits > 0 && ` (${aiTimings.cache_hits} cached)`}
       </Text>

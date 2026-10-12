@@ -36,4 +36,5 @@ export const techniqueLabel: Record<Technique, string> = {
   invisible_unicode: "Invisible Unicode",
   metadata: "Metadata",
   invisible_render: "Invisible render",
+  visually_hidden: "Visually hidden",
 };

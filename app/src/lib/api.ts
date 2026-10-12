@@ -9,13 +9,17 @@ export type Technique =
   | "off_page"
   | "invisible_unicode"
   | "metadata"
-  | "invisible_render";
+  | "invisible_render"
+  | "visually_hidden";
 export type Classification = "manipulation" | "suspicious" | "benign";
 export type Risk = "clean" | "suspicious" | "manipulation";
 
 // pending: AI review not run yet · ok/cached: AI label applied · skipped: rules already say manipulation
 // invalid: AI answer failed validation · unavailable: no key / API error (rule-based only)
 export type LlmStatus = "pending" | "ok" | "cached" | "skipped" | "invalid" | "unavailable";
+
+// style: the rule checks on how text is drawn · visual: the OCR diff against the rendered page
+export type Detector = "style" | "visual";
 
 export interface Flag {
   id: string;
@@ -32,6 +36,7 @@ export interface Flag {
   bbox: [number, number, number, number] | null;
   overlay_bbox: [number, number, number, number] | null; // bbox clamped inside the page (PDF points); null = no box
   off_page: boolean; // text sits (partly) outside the page; the box marks the edge it overflows
+  detected_by: Detector[];
 }
 
 export interface PagePreview {
@@ -49,7 +54,15 @@ export interface ScanResult {
   summary: { total_flags: number; by_technique: Partial<Record<Technique, number>> };
   flags: Flag[];
   pages: PagePreview[];
-  timings_ms: { parse: number; detect: number; rule_classify: number; render?: number; total: number };
+  timings_ms: {
+    parse: number;
+    detect: number;
+    rule_classify: number;
+    render?: number;
+    visual_diff?: number;
+    total: number;
+  };
+  visual_diff: { status: "ok" | "off" | "unavailable"; error?: string; pages_ocrd?: number };
 }
 
 export interface ClassifyResult {

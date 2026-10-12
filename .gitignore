@@ -5,3 +5,5 @@ __pycache__/
 .env
 .venv/
 __pycache__/
+backend/test_pdfs/resume.pdf
+test_pdfs/resume.pdf

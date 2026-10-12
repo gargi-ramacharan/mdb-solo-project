@@ -20,6 +20,10 @@ pip install -r requirements.txt
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
+The OCR for the visual diff is RapidOCR (`rapidocr-onnxruntime`, installed by `requirements.txt`; no system
+packages or Homebrew needed). Its models load once, on the first scan. If it can't load, scans still run
+and report `visual_diff.status: "unavailable"` with the error.
+
 Check it: `curl http://localhost:8000/health` → `{"status":"ok"}`
 
 ### AI review (optional)
@@ -57,8 +61,10 @@ plus `repeat_penalty: 1.1` and `num_predict` = 100 + 150 per snippet. A 7B model
 
 ### API
 
-- `POST /scan` (multipart `file`): returns rule-based results immediately, plus `scan_id` and
-  `timings_ms: {parse, detect, rule_classify, total}`.
+- `POST /scan?visual=true` (multipart `file`): returns rule-based results immediately, plus `scan_id` and
+  `timings_ms: {parse, detect, visual_diff, rule_classify, render, total}`. Every flag has
+  `detected_by: ["style"] | ["visual"] | ["style", "visual"]`, and `visual_diff: {status: ok|off|unavailable}`
+  says whether the OCR ran. `?visual=false` skips the OCR for a fast style-only scan.
 - `POST /classify/{scan_id}`: runs the AI review on that scan and returns updated `flags` (each with
   `rule_label`, `llm_label`, `final_label`, `llm_reason`, `llm_status`), the updated `risk`, and
   `timings_ms: {llm, cache_hits, llm_calls, retries, llm_error, provider}`. Scans are kept in memory (last 200).
@@ -75,10 +81,14 @@ cd backend
 .venv/bin/python benchmark.py --provider ollama # or --provider anthropic
 .venv/bin/python benchmark.py --mock-llm        # fake LLM with 600 ms latency (no credits used)
 .venv/bin/python benchmark.py path/to/folder    # any folder of PDFs
+.venv/bin/python benchmark.py --no-visual       # skip the OCR visual diff
 ```
 
-The benchmark prints a per-file table (parse/detect/LLM/total ms, cache hits, final risk) with averages,
-writes `benchmark_results.csv`, then reruns everything to show the cache-hit speedup.
+The benchmark prints a per-file table (parse/detect/visual diff/LLM/total ms, cache hits, final risk) with averages,
+a per-flag table, and a detector table: for every PDF, how many flags only the style checks found, only
+the visual diff found, and both found, plus a summary like "the visual diff caught N attacks the style
+checks missed, with 0 false positives on the clean PDFs". It writes `benchmark_results.csv`, then reruns
+everything to show the cache-hit speedup.
 
 ## 2. Test PDFs (optional; already generated)
 
@@ -97,6 +107,10 @@ curl -s -F "file=@test_pdfs/poisoned_paper.pdf" http://localhost:8000/scan | pyt
 | classifier_attack_2.pdf | `manipulation` (1pt fake `</snippet> SYSTEM:` delimiter break-out) |
 | classifier_attack_3.pdf | `suspicious` by rules (polite persuasion, no keywords); the AI review is meant to raise it |
 | benign_hidden.pdf | `clean` (white "Page 1 of 3" and a figure label, both `benign`) |
+| covered_by_rect.pdf | `manipulation`, visual diff only (black text under a white rectangle) |
+| covered_by_image.pdf | `manipulation`, visual diff only (instruction for AI screeners under an image) |
+| clipped_text.pdf | visual diff only (instruction drawn outside the active clipping path); `suspicious` by rules, the AI review raises it to `manipulation` |
+| colored_background.pdf | `manipulation`, both detectors (dark blue text on a dark blue box) |
 
 ## 3. App (terminal 2)
 
@@ -135,6 +149,26 @@ them to Files (iOS) or Downloads (Android). The picker can then open them.
 - **metadata**: title/subject/keywords/etc. containing instructions or invisible chars.
 
 Adjacent flagged spans with the same technique are merged into one flag.
+
+**Visual diff** (`backend/visual_diff.py`, technique **visually_hidden**): the checks above look at *how*
+text is drawn, so they miss text that is drawn normally and then hidden by something else: covered by a
+shape or an image, or clipped away. The visual diff compares the text layer with what a human sees:
+
+1. Render the page at 2x and OCR it with RapidOCR. It returns *lines*: a 4-point polygon plus text.
+2. Turn each polygon into a bbox in PDF points (min/max of the corners, divided by the zoom) and, for each
+   extracted span (3+ characters), take the OCR lines on the same line that overlap it.
+3. Normalize both (lowercase, letters/digits only; RapidOCR often drops spaces) and look for each span word
+   as a fuzzy substring of those lines (rapidfuzz `partial_ratio` >= 75, so OCR typos like `rn`/`m` don't
+   cause false flags; words under 4 characters must match exactly). If less than half of the span is
+   found, it is a candidate.
+4. Second look: RapidOCR's line detector sometimes skips a visible line, so each candidate's own area is
+   rendered at 3x and run through the recognizer alone. A crop with almost no contrast counts as blank, because
+   the recognizer would otherwise read dark-blue-on-dark-blue text a human can't. Still not found means
+   visually hidden. Consecutive hidden spans merge into one flag.
+5. A span already flagged by a style check isn't duplicated: that flag gets `detected_by: ["style", "visual"]`.
+
+New flags then go through the same rules and AI review as everything else.
+
 Classification happens in two stages:
 
 1. **Rules** (`backend/classifier.py`): instant. Invisible characters that encode hidden text (Unicode tag

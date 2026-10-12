@@ -22,10 +22,10 @@ def health():
     return {"status": "ok"}
 
 
-def run_scan(data: bytes, filename: str) -> dict:
+def run_scan(data: bytes, filename: str, visual: bool = True) -> dict:
     """Scan, render flagged pages, store both, and return the response body."""
     images: dict[int, bytes] = {}
-    result = scan_pdf(data, filename, page_images=images)
+    result = scan_pdf(data, filename, page_images=images, visual=visual)
     scan_id = uuid.uuid4().hex
     result["scan_id"] = scan_id
     for p in result["pages"]:
@@ -39,12 +39,14 @@ def run_scan(data: bytes, filename: str) -> dict:
 
 
 @app.post("/scan")
-async def scan(file: UploadFile = File(...)):
-    data = await file.read()
+def scan(file: UploadFile = File(...), visual: bool = True):
+    # Plain `def` so the OCR (seconds, CPU-bound) runs in a worker thread instead of blocking the event loop.
+    # ?visual=false skips the OCR visual diff for a fast style-only scan.
+    data = file.file.read()
     if not data.startswith(b"%PDF"):
         raise HTTPException(status_code=400, detail="File is not a PDF")
     try:
-        return run_scan(data, file.filename or "upload.pdf")
+        return run_scan(data, file.filename or "upload.pdf", visual)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Could not scan PDF: {e}")
 

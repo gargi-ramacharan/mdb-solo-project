@@ -21,8 +21,9 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    // Initial state is already "checking", so only the async result needs setting here.
+    checkHealth().then((ok) => setStatus(ok ? "online" : "offline"));
+  }, []);
 
   const pick = async () => {
     const res = await DocumentPicker.getDocumentAsync({ type: "application/pdf", copyToCacheDirectory: true });

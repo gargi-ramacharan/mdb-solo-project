@@ -3,6 +3,7 @@ import { ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { Badge } from "../../lib/Badge";
 import { revealInvisible } from "../../lib/reveal";
+import type { Flag } from "../../lib/api";
 import { useScan } from "../../lib/store";
 import { classColor, colors, mono, techniqueLabel } from "../../lib/theme";
 
@@ -64,12 +65,19 @@ export default function FlagDetail() {
       <Text style={styles.note}>The AI can raise a label but never lower it.</Text>
 
       <View style={styles.grid}>
+        <Field label="CAUGHT BY" value={caughtBy(flag.detected_by)} />
         <Field label="TECHNIQUE" value={flag.technique} />
         <Field label="PAGE" value={flag.technique === "metadata" ? "— (metadata)" : String(flag.page)} />
         <Field label="BBOX" value={flag.bbox ? `[${flag.bbox.map((v) => v.toFixed(1)).join(", ")}]` : "null"} />
       </View>
     </ScrollView>
   );
+}
+
+function caughtBy(detectors: Flag["detected_by"] | undefined): string {
+  const d = detectors ?? ["style"];
+  if (d.includes("style") && d.includes("visual")) return "both (style + visual)";
+  return d.includes("visual") ? "visual (OCR diff)" : "style";
 }
 
 function Field({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {
