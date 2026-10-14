@@ -1,7 +1,7 @@
 import { useImperativeHandle, useRef, useState, type Ref } from "react";
 import { Image, Pressable, StyleSheet, Text, View } from "react-native";
 
-import { pageImageUrl, type Flag, type PagePreview } from "./api";
+import { type Flag, type PagePreview } from "./api";
 import { revealInvisible } from "./reveal";
 import { classColor, colors, mono } from "./theme";
 
@@ -57,7 +57,12 @@ export function PageView({ pages, flags, mode, highlightId, onPressFlag, ref }: 
                 style={[styles.imageWrap, { width, height: h }]}
                 onLayout={(e) => (imageY.current[p.page] = e.nativeEvent.layout.y)}
               >
-                <Image source={{ uri: pageImageUrl(p) }} style={{ width, height: h }} resizeMode="stretch" />
+                {p.image ? (
+                  <Image source={{ uri: p.image }} style={{ width, height: h }} resizeMode="stretch" />
+                ) : (
+                  // Left out of the response to stay under the size limit: boxes on a blank page.
+                  <View style={{ width, height: h, backgroundColor: "#FFFFFF" }} />
+                )}
                 {boxed.map((f) => (
                   <FlagBox key={f.id} flag={f} scale={s} pageW={width} pageH={h} mode={mode}
                            highlighted={f.id === highlightId} onPress={() => onPressFlag(f.id)} />

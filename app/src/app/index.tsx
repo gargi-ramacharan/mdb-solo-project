@@ -5,7 +5,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { APP_NAME } from "../../config";
-import { BACKEND_URL, checkHealth } from "../lib/api";
+import { BACKEND_URL, checkHealth, IS_REMOTE_API, uploadSizeError } from "../lib/api";
 import { useScan } from "../lib/store";
 import { colors, mono } from "../lib/theme";
 
@@ -14,6 +14,7 @@ type Status = "checking" | "online" | "offline";
 export default function Home() {
   const { setFile, setResult } = useScan();
   const [status, setStatus] = useState<Status>("checking");
+  const [pickError, setPickError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setStatus("checking");
@@ -29,8 +30,12 @@ export default function Home() {
     const res = await DocumentPicker.getDocumentAsync({ type: "application/pdf", copyToCacheDirectory: true });
     if (res.canceled || !res.assets?.length) return;
     const a = res.assets[0];
+    const size = a.size ?? a.file?.size;
+    const tooLarge = uploadSizeError(size); // checked before uploading: the server would reject it anyway
+    setPickError(tooLarge);
+    if (tooLarge) return;
     setResult(null);
-    setFile({ uri: a.uri, name: a.name, mimeType: a.mimeType, file: a.file });
+    setFile({ uri: a.uri, name: a.name, mimeType: a.mimeType, size, file: a.file });
     router.push("/scanning");
   };
 
@@ -57,6 +62,7 @@ export default function Home() {
       >
         <Text style={styles.buttonText}>Scan a PDF</Text>
       </Pressable>
+      {pickError && <Text style={styles.error}>{pickError}</Text>}
 
       <Pressable onPress={refresh} style={styles.status}>
         <View style={[styles.dot, { backgroundColor: dot }]} />
@@ -67,8 +73,9 @@ export default function Home() {
       <Text style={styles.url}>{BACKEND_URL}</Text>
       {status === "offline" && (
         <Text style={styles.hint}>
-          Is the server running? On a phone, it must be on the same Wi-Fi and the URL must be your computer’s LAN IP
-          (see config.ts).
+          {IS_REMOTE_API
+            ? "The online demo backend isn’t responding. Try again in a moment."
+            : "Is the server running? On a phone, it must be on the same Wi-Fi and the URL must be your computer’s LAN IP (see config.ts)."}
         </Text>
       )}
     </SafeAreaView>
@@ -92,5 +99,6 @@ const styles = StyleSheet.create({
   dot: { width: 8, height: 8, borderRadius: 4 },
   statusText: { color: colors.muted, fontSize: 13 },
   url: { color: colors.muted, opacity: 0.6, fontSize: 11, textAlign: "center", marginTop: 4, fontFamily: mono },
+  error: { color: colors.red, fontSize: 13, textAlign: "center", marginTop: 12, lineHeight: 19 },
   hint: { color: colors.yellow, fontSize: 12, textAlign: "center", marginTop: 12, lineHeight: 18 },
 });

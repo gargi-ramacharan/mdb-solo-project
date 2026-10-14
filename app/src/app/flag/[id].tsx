@@ -3,7 +3,7 @@ import { ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { Badge } from "../../lib/Badge";
 import { revealInvisible } from "../../lib/reveal";
-import type { Flag } from "../../lib/api";
+import { withoutAiLabel, type Flag } from "../../lib/api";
 import { useScan } from "../../lib/store";
 import { classColor, colors, mono, techniqueLabel } from "../../lib/theme";
 
@@ -21,13 +21,14 @@ export default function FlagDetail() {
   }
 
   const color = classColor[flag.final_label];
+  const fallback = withoutAiLabel(result!);
   const aiLabel =
     flag.llm_label ??
     ({
-      pending: ai === "error" ? "unavailable (rule-based only)" : "review in progress…",
+      pending: ai === "error" || ai === "off" ? `unavailable (${fallback})` : "review in progress…",
       skipped: "not needed (rules already confirmed)",
-      invalid: "answer rejected (rule-based only)",
-      unavailable: "unavailable (rule-based only)",
+      invalid: `answer rejected (${fallback})`,
+      unavailable: `unavailable (${fallback})`,
       ok: "—",
       cached: "—",
     } as const)[flag.llm_status];
@@ -61,7 +62,9 @@ export default function FlagDetail() {
           <Text style={styles.reason}>{flag.llm_reason}</Text>
         </>
       )}
-      {flag.llm_status === "unavailable" && <Text style={styles.note}>AI review unavailable (rule-based only)</Text>}
+      {(flag.llm_status === "unavailable" || ai === "off") && (
+        <Text style={styles.note}>AI review unavailable ({fallback})</Text>
+      )}
       <Text style={styles.note}>The AI can raise a label but never lower it.</Text>
 
       <View style={styles.grid}>

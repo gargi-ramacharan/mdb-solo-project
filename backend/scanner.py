@@ -241,7 +241,8 @@ def rule_classify(flags: list[dict]) -> None:
         f["llm_status"] = "pending"
 
 
-PREVIEW_ZOOM = 1.5
+PREVIEW_ZOOM = 1.0      # 72 dpi: enough for the overlay, and keeps the /scan response small
+PREVIEW_JPEG_QUALITY = 70
 OFF_PAGE_STRIP_PT = 8.0  # how thick the edge marker for fully off-page text is, in PDF points
 
 
@@ -266,7 +267,7 @@ def overlay_box(bbox, technique: str, page_rect: pymupdf.Rect) -> tuple[list[flo
 
 
 def render_flagged_pages(doc: pymupdf.Document, flags: list[dict], images: dict) -> list[dict]:
-    """Render each page that has a boxed flag to PNG (into `images`, keyed by page number) and give every
+    """Render each page that has a boxed flag to JPEG (into `images`, keyed by page number) and give every
     flag with a bbox an `overlay_bbox` / `off_page`. Flags without a bbox (metadata) get overlay_bbox None."""
     pages = []
     flagged = sorted({f["page"] for f in flags if f["bbox"] is not None and f["page"] >= 1})
@@ -279,7 +280,7 @@ def render_flagged_pages(doc: pymupdf.Document, flags: list[dict], images: dict)
             if f["page"] == n and f["bbox"] is not None:
                 f["overlay_bbox"], f["off_page"] = overlay_box(f["bbox"], f["technique"], rect)
         pix = page.get_pixmap(matrix=pymupdf.Matrix(PREVIEW_ZOOM, PREVIEW_ZOOM), alpha=False)
-        images[n] = pix.tobytes("png")
+        images[n] = pix.tobytes("jpeg", jpg_quality=PREVIEW_JPEG_QUALITY)
         pages.append({"page": n, "width": round(rect.width, 1), "height": round(rect.height, 1)})
     return pages
 
@@ -287,6 +288,8 @@ def render_flagged_pages(doc: pymupdf.Document, flags: list[dict], images: dict)
 def run_visual_diff(doc: pymupdf.Document, text_dicts: list[dict], flags: list[dict]) -> dict:
     """OCR every page that has text and add "visually_hidden" flags in place. Returns the status
     block for the result; OCR problems never fail the scan."""
+    if not visual_diff.enabled():
+        return {"status": "unavailable", "error": "visual diff disabled (ENABLE_VISUAL_DIFF=false)"}
     try:
         visual_diff.get_engine()
     except visual_diff.OcrUnavailable as e:
@@ -306,7 +309,7 @@ def run_visual_diff(doc: pymupdf.Document, text_dicts: list[dict], flags: list[d
 
 
 def scan_pdf(data: bytes, filename: str, page_images: dict | None = None, visual: bool = False) -> dict:
-    """Scan a PDF. If `page_images` is a dict, flagged pages are also rendered into it as PNG bytes
+    """Scan a PDF. If `page_images` is a dict, flagged pages are also rendered into it as JPEG bytes
     (page number -> bytes) and the result gets a `pages` list for the preview overlay.
     `visual=True` also runs the OCR visual diff (slower; the API turns it on by default)."""
     t0 = time.perf_counter()

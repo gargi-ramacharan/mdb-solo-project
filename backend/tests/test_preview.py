@@ -21,13 +21,14 @@ def test_scan_without_page_images_is_unchanged():
     assert result["pages"] == []
 
 
-def test_flagged_pages_are_rendered_as_png():
+def test_flagged_pages_are_rendered_as_small_jpeg():
     images = {}
     result = scan_pdf(load("poisoned_paper.pdf"), "p.pdf", page_images=images)
     assert result["pages"] == [{"page": 1, "width": 595.0, "height": 842.0}]
-    assert images[1].startswith(b"\x89PNG")
+    assert images[1].startswith(b"\xff\xd8")  # JPEG
     pix = pymupdf.Pixmap(images[1])
-    assert abs(pix.width - 595 * 1.5) <= 1 and abs(pix.height - 842 * 1.5) <= 1
+    assert abs(pix.width - 595) <= 1 and abs(pix.height - 842) <= 1
+    assert len(images[1]) < 200_000
 
 
 def test_clean_pdf_renders_nothing():
@@ -69,7 +70,7 @@ def test_run_scan_stores_images_and_endpoint_serves_them():
     sid = result["scan_id"]
     assert result["pages"][0]["image_url"] == f"/scan/{sid}/page/1.png"
     resp = main.page_image(sid, 1)
-    assert resp.media_type == "image/png" and resp.body.startswith(b"\x89PNG")
+    assert resp.media_type == "image/jpeg" and resp.body.startswith(b"\xff\xd8")
     for bad in [(sid, 2), ("nope", 1)]:
         with pytest.raises(HTTPException) as e:
             main.page_image(*bad)

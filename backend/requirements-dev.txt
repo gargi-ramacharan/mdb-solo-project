@@ -1,0 +1,4 @@
+# Local development: the runtime deps plus a server and the test runner.
+-r requirements.txt
+uvicorn[standard]>=0.29
+pytest>=8

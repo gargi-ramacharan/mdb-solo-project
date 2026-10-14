@@ -17,6 +17,7 @@ it gets a second look: just its area is rendered and run through the recognizer 
 almost no contrast (dark blue on dark blue) counts as blank, since the recognizer normalizes contrast
 and would read text no human can.
 """
+import os
 import re
 import threading
 from dataclasses import dataclass
@@ -124,6 +125,12 @@ def get_engine():
         if _engine is None:
             raise OcrUnavailable(_engine_error)
         return _engine
+
+
+def enabled() -> bool:
+    """ENABLE_VISUAL_DIFF (default true). Set it to false where OCR shouldn't run, e.g. to keep a
+    serverless bundle small: the scan still works and reports the visual diff as unavailable."""
+    return os.environ.get("ENABLE_VISUAL_DIFF", "true").strip().lower() not in ("0", "false", "no", "off")
 
 
 def ocr_available() -> bool:

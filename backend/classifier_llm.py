@@ -268,9 +268,31 @@ class OllamaClassifier:
         return parse_response(raw, ids, wrapped=True)
 
 
+DISABLED_PROVIDERS = ("none", "off", "disabled", "false", "0")
+
+
+def configured_provider() -> str:
+    """LLM_PROVIDER, lowercased. Unset means "none": no AI review (e.g. the Vercel deployment)."""
+    return (os.environ.get("LLM_PROVIDER") or "none").strip().lower() or "none"
+
+
+def ai_review_status() -> dict:
+    """Whether AI review is configured, from env vars only (no network calls). The app uses this to
+    skip the AI review step entirely when it's off."""
+    provider = configured_provider()
+    if provider in DISABLED_PROVIDERS:
+        return {"enabled": False, "provider": None, "reason": "AI review disabled (LLM_PROVIDER=none)"}
+    classifier = get_classifier()
+    if classifier is None:
+        return {"enabled": False, "provider": None, "reason": f"AI review not configured for LLM_PROVIDER={provider}"}
+    return {"enabled": True, "provider": classifier.name, "reason": None}
+
+
 def get_classifier(provider: str | None = None) -> LLMClassifier | None:
-    """Provider from the argument, else LLM_PROVIDER (default "anthropic"). None = no usable config."""
-    provider = (provider or os.environ.get("LLM_PROVIDER") or "anthropic").strip().lower()
+    """Provider from the argument, else LLM_PROVIDER (default "none"). None = AI review off / no usable config."""
+    provider = (provider or configured_provider()).strip().lower()
+    if provider in DISABLED_PROVIDERS:
+        return None
     if provider == "ollama":
         return OllamaClassifier(
             model=os.environ.get("OLLAMA_MODEL", "").strip() or OLLAMA_DEFAULT_MODEL,
@@ -355,7 +377,8 @@ def classify_flags(flags: list[dict], classifier: LLMClassifier | None = None, u
             if results is not None:
                 llm_error = None  # at least one attempt answered; per-flag gaps show up as "invalid"
         else:
-            llm_error = "no LLM configured (ANTHROPIC_API_KEY not set or unknown LLM_PROVIDER)"
+            llm_error = ("AI review disabled (LLM_PROVIDER=none)" if configured_provider() in DISABLED_PROVIDERS
+                         else "no LLM configured (ANTHROPIC_API_KEY not set or unknown LLM_PROVIDER)")
         for i, f in enumerate(pending):
             r = results[i] if results is not None else None
             if results is None:

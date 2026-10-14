@@ -29,7 +29,7 @@ export default function Scanning() {
     Promise.all([scanPdf(file), minDelay])
       .then(([result]) => {
         setResult(result);
-        startAiReview(result.scan_id); // report shows rule labels now; AI labels fill in later
+        startAiReview(result); // report shows rule labels now; AI labels fill in later
         router.replace("/report");
       })
       .catch((e) => setError(e?.message ?? "Scan failed"))

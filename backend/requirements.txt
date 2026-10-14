@@ -1,9 +1,10 @@
+# Runtime dependencies. This is what Vercel installs, so keep dev-only tools in requirements-dev.txt.
 fastapi>=0.110
-uvicorn[standard]>=0.29
 python-multipart>=0.0.9
 PyMuPDF>=1.24
 anthropic>=1.11,<2
 python-dotenv>=1.0
-pytest>=8
-rapidocr-onnxruntime>=1.4
 rapidfuzz>=3.6
+# OCR for the visual diff (~330 MB installed on Linux, mostly OpenCV + onnxruntime).
+# Remove this line (and set ENABLE_VISUAL_DIFF=false) for a small, OCR-free deployment.
+rapidocr-onnxruntime>=1.4

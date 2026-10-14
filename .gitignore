@@ -7,3 +7,6 @@ __pycache__/
 __pycache__/
 backend/test_pdfs/resume.pdf
 test_pdfs/resume.pdf
+.env.*
+!.env.example
+.vercel/

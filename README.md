@@ -16,27 +16,31 @@ test_pdfs/   generate_test_pdfs.py + generated demo PDFs
 cd backend
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # runtime deps + uvicorn + pytest
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
+`requirements.txt` holds only what the deployed backend needs (Vercel installs it); `requirements-dev.txt`
+adds the local server and the test runner.
+
 The OCR for the visual diff is RapidOCR (`rapidocr-onnxruntime`, installed by `requirements.txt`; no system
-packages or Homebrew needed). Its models load once, on the first scan. If it can't load, scans still run
+packages or Homebrew needed). `ENABLE_VISUAL_DIFF=false` turns it off. Its models load once, on the first scan. If it can't load, scans still run
 and report `visual_diff.status: "unavailable"` with the error.
 
-Check it: `curl http://localhost:8000/health` → `{"status":"ok"}`
+Check it: `curl http://localhost:8000/health` → `{"status":"ok", "ai_review": {...}, "visual_diff": true}`
 
 ### AI review (optional)
 
 The LLM second opinion can run on **Claude Haiku 4.5** (Anthropic API) or a **local model via Ollama**
-(free, offline). Without either, everything still works and flags are labeled rule-based only
-("AI review unavailable").
+(free, offline). `LLM_PROVIDER` picks one; unset or `none` means no AI review: nothing is called, flags keep
+their rule labels, and the app shows "AI review unavailable (rules + OCR only)". That's how the Vercel
+deployment runs.
 
 ```bash
 cp .env.example .env      # in backend/, then edit it
 ```
 
-**Anthropic** (default): set `ANTHROPIC_API_KEY=sk-ant-...` (and `LLM_PROVIDER=anthropic`, or leave it unset).
+**Anthropic**: set `LLM_PROVIDER=anthropic` and `ANTHROPIC_API_KEY=sk-ant-...`.
 
 **Ollama** (local):
 
@@ -61,15 +65,24 @@ plus `repeat_penalty: 1.1` and `num_predict` = 100 + 150 per snippet. A 7B model
 
 ### API
 
-- `POST /scan?visual=true` (multipart `file`): returns rule-based results immediately, plus `scan_id` and
-  `timings_ms: {parse, detect, visual_diff, rule_classify, render, total}`. Every flag has
+The API is **stateless** (serverless instances don't share memory), so each response carries everything:
+
+- `GET /health`: `{status, ai_review: {enabled, provider, reason}, visual_diff}`. Config only, no network calls.
+- `POST /scan?visual=true` (multipart `file`): rule-based results, plus `scan_id`, `ai_review`,
+  `timings_ms: {parse, detect, visual_diff, rule_classify, render, total}` and `pages`: every flagged page as
+  `{page, width, height, image}` where `image` is a 72 dpi JPEG **data URL** (`null` if it would push the
+  response past ~3 MB of images; Vercel's response limit is 4.5 MB). Every flag has
   `detected_by: ["style"] | ["visual"] | ["style", "visual"]`, and `visual_diff: {status: ok|off|unavailable}`
   says whether the OCR ran. `?visual=false` skips the OCR for a fast style-only scan.
-- `POST /classify/{scan_id}`: runs the AI review on that scan and returns updated `flags` (each with
-  `rule_label`, `llm_label`, `final_label`, `llm_reason`, `llm_status`), the updated `risk`, and
-  `timings_ms: {llm, cache_hits, llm_calls, retries, llm_error, provider}`. Scans are kept in memory (last 200).
+- `POST /classify` (JSON `{"flags": [{id, text, technique, rule_label}, ...]}`): AI review of the flags sent.
+  Returns `{risk, flags: [{id, rule_label, llm_label, llm_reason, llm_status, final_label}], timings_ms:
+  {llm, cache_hits, llm_calls, retries, llm_error, provider}}`. The input is untrusted: labels must be known
+  values, text is capped at 20,000 chars (the LLM sees at most 1,000), at most 300 flags, unique ids, other
+  fields ignored. The final label is still `max(rule_label, llm_label)`.
+- Legacy, local only: `POST /classify/{scan_id}` and `GET /scan/{scan_id}/page/{n}.png` read an optional
+  in-memory cache of the last 100 scans (`SCAN_CACHE`, on locally, off on Vercel).
 
-The app shows the report as soon as `/scan` returns, then calls `/classify` in the background and
+The app shows the report as soon as `/scan` returns, then (if `ai_review.enabled`) sends the flags to `/classify` in the background and
 updates the badges and the risk banner when the AI review comes back.
 
 ### Tests and benchmark
@@ -205,3 +218,24 @@ both providers:
 - **Fail closed to rules:** no key, Ollama not running, timeout (5 s API with no retries, 30 s Ollama),
   HTTP error, truncated output, or refusal all mean
   `llm_status: "unavailable"` and the rule labels stand. The scan itself never waits on the LLM.
+
+## Deploying to Vercel
+
+Two Vercel projects from the same repo: `backend/` (FastAPI, one Python function) and `app/` (static Expo web
+export). Config lives in `backend/vercel.json` (`maxDuration: 300`, tests and local files excluded from the
+bundle), `backend/.python-version` (3.12) and `app/vercel.json` (export command, `dist`, SPA rewrite so
+routes like `/report` don't 404 on refresh).
+
+Limits that shaped the design (Vercel docs, Oct 2026): 4.5 MB request and response bodies, 300 s max
+duration on Hobby, 500 MB uncompressed Python bundles (5 GB with Large Functions, beta). The app refuses PDFs
+over 4 MB before uploading when it talks to a deployed backend (`EXPO_PUBLIC_API_URL` set).
+
+| Env var | Where | Meaning |
+|---|---|---|
+| `LLM_PROVIDER` | backend | `none` (default), `ollama`, or `anthropic` |
+| `ENABLE_VISUAL_DIFF` | backend | OCR visual diff, default `true` |
+| `ALLOWED_ORIGINS` | backend | comma-separated web origins allowed by CORS (localhost always allowed) |
+| `SCAN_CACHE` | backend | legacy in-memory cache, default on locally, off on Vercel |
+| `EXPO_PUBLIC_API_URL` | app (build time) | backend URL; unset = local auto-detect |
+
+`.env` files and `test_pdfs/resume.pdf` are gitignored, so they're never in the repo and never deployed.

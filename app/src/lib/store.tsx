@@ -1,8 +1,9 @@
 import { createContext, ReactNode, useCallback, useContext, useRef, useState } from "react";
 
-import { classifyScan, type ClassifyResult, type PickedFile, type ScanResult } from "./api";
+import { classifyFlags, type ClassifyResult, type PickedFile, type ScanResult } from "./api";
 
-export type AiState = "idle" | "pending" | "done" | "error";
+// off: this backend has no AI provider (LLM_PROVIDER=none), so the review is skipped entirely
+export type AiState = "idle" | "pending" | "done" | "error" | "off";
 
 interface ScanState {
   file: PickedFile | null;
@@ -12,7 +13,7 @@ interface ScanState {
   ai: AiState;
   aiTimings: ClassifyResult["timings_ms"] | null;
   /** Fire-and-forget AI review. Rule-based results stay on screen; AI labels merge in when they arrive. */
-  startAiReview: (scanId: string) => void;
+  startAiReview: (scan: ScanResult) => void;
 }
 
 const ScanContext = createContext<ScanState | null>(null);
@@ -31,12 +32,26 @@ export function ScanProvider({ children }: { children: ReactNode }) {
     setAiTimings(null);
   }, []);
 
-  const startAiReview = useCallback((scanId: string) => {
+  const startAiReview = useCallback((scan: ScanResult) => {
+    const scanId = scan.scan_id;
+    if (!scan.ai_review?.enabled) {
+      setAi("off"); // no provider configured: don't call /classify or show a spinner
+      return;
+    }
+    if (scan.flags.length === 0) {
+      setAi("done");
+      return;
+    }
     setAi("pending");
-    classifyScan(scanId)
+    classifyFlags(scan.flags)
       .then((c) => {
         if (currentScan.current !== scanId) return; // user already started another scan
-        setResultState((r) => (r && r.scan_id === scanId ? { ...r, risk: c.risk, flags: c.flags } : r));
+        const byId = new Map(c.flags.map((f) => [f.id, f]));
+        setResultState((r) =>
+          r && r.scan_id === scanId
+            ? { ...r, risk: c.risk, flags: r.flags.map((f) => ({ ...f, ...byId.get(f.id) })) }
+            : r,
+        );
         setAiTimings(c.timings_ms);
         setAi("done");
       })

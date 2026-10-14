@@ -6,7 +6,7 @@ import { Badge } from "../lib/Badge";
 import { PageView, type PageMode, type PageViewHandle } from "../lib/PageView";
 import { useScan } from "../lib/store";
 import { classColor, colors, mono, riskStyle, techniqueLabel } from "../lib/theme";
-import type { Technique } from "../lib/api";
+import { withoutAiLabel, type Technique } from "../lib/api";
 
 export default function Report() {
   const { result, ai, aiTimings } = useScan();
@@ -38,7 +38,8 @@ export default function Report() {
   const risk = riskStyle[result.risk];
   const counts = { manipulation: 0, suspicious: 0, benign: 0 };
   result.flags.forEach((f) => counts[f.final_label]++);
-  const aiUnavailable = ai === "error" || (ai === "done" && result.flags.some((f) => f.llm_status === "unavailable"));
+  const aiUnavailable =
+    ai === "off" || ai === "error" || (ai === "done" && result.flags.some((f) => f.llm_status === "unavailable"));
 
   return (
     <ScrollView ref={scrollRef} style={{ backgroundColor: colors.bg }} contentContainerStyle={styles.container}>
@@ -65,7 +66,7 @@ export default function Report() {
           {ai === "pending"
             ? "AI review in progress…"
             : aiUnavailable
-              ? "AI review unavailable (rule-based only)"
+              ? `AI review unavailable (${withoutAiLabel(result)})`
               : ai === "done"
                 ? "AI review complete"
                 : ""}
