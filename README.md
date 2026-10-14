@@ -1,6 +1,6 @@
-# mdb-solo-project
+# Underline
 
-Prototype scanner that finds **hidden text in PDFs**: text an AI model reads but a human can't see
+Underline is a prototype scanner that finds **hidden text in PDFs**: text an AI model reads but a human can't see
 (white-on-white prompts, 1pt fonts, off-page text, zero-width Unicode, metadata).
 The app name lives in one place: `APP_NAME` in `app/config.ts`.
 

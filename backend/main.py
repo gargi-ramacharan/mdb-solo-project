@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from classifier_llm import classify_flags
 from scanner import scan_pdf
 
-app = FastAPI(title="PDF scan API")
+app = FastAPI(title="Underline API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 # In-memory scan store for POST /classify/{scan_id} and the page previews. Bounded so a long-running

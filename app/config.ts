@@ -1,6 +1,6 @@
 // Single place to rename the app and point it at the backend.
 
-export const APP_NAME = "Hidden Text Scanner";
+export const APP_NAME = "Underline";
 
 // Backend URL.
 // IMPORTANT: on a physical phone (Expo Go), "localhost" means the PHONE, not your computer.
